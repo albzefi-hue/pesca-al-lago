@@ -49,6 +49,14 @@
 </div>
 
 <div class="card">
+  <label>Preset di frequenze</label>
+  <select id="preset">
+    <option value="20000-24000">20 – 24 kHz (microfono telefono)</option>
+    <option value="20000-40000">20 – 40 kHz</option>
+    <option value="40000-60000">40 – 60 kHz</option>
+    <option value="20000-100000">20 – 100 kHz (solo con microfono ultrasonico)</option>
+    <option value="custom">Personalizzata</option>
+  </select>
   <label>Banda: da (Hz)</label>
   <input id="f1" type="number" value="20000">
   <label>a (Hz)</label>
@@ -141,6 +149,30 @@ vengono disattivati, quando il browser lo consente.
       $('delta').textContent = (d >= 0 ? '+' : '') + d.toFixed(1) + ' dB';
     }
   }
+
+  // Preset di banda: scegliendo un preset riempie i campi; modificando i campi passa a "Personalizzata".
+  function resetBaseline() {
+    baseline = null;
+    $('base').textContent = 'non impostata';
+    $('delta').textContent = '--';
+  }
+
+  $('preset').onchange = () => {
+    const v = $('preset').value;
+    if (v !== 'custom') {
+      const [a, b] = v.split('-');
+      $('f1').value = a;
+      $('f2').value = b;
+      resetBaseline();
+    }
+  };
+
+  ['f1', 'f2'].forEach(id => {
+    $(id).onchange = () => {
+      $('preset').value = 'custom';
+      resetBaseline();
+    };
+  });
 
   $('baseBtn').onclick = () => {
     if (lastRel === null) { alert('Avvia prima la misura.'); return; }
