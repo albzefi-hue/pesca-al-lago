@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Fonometro ultrasuoni</title>
+<style>
+  body{font-family:system-ui,sans-serif;margin:0 auto;padding:16px;background:#111;color:#eee;max-width:520px}
+  h1{font-size:20px;margin:8px 0 12px}
+  .card{background:#1d1d1d;border-radius:12px;padding:14px;margin:10px 0}
+  .big{font-size:44px;font-weight:700;text-align:center}
+  .lbl{font-size:13px;color:#aaa;text-align:center}
+  button{width:100%;padding:14px;font-size:17px;border:0;border-radius:10px;background:#2b7fff;color:#fff;margin:4px 0}
+  button.stop{background:#c0392b}
+  input{width:100%;padding:8px;font-size:16px;border-radius:8px;border:1px solid #444;background:#222;color:#eee;box-sizing:border-box;margin:4px 0 10px}
+  .bar{height:18px;background:#333;border-radius:9px;overflow:hidden}
+  #fill{height:100%;width:0;background:#2ecc71;transition:width .1s}
+  .row{display:flex;justify-content:space-between;font-size:15px;margin:6px 0}
+  .warn{color:#f1c40f;font-size:13px;line-height:1.4}
+</style>
+</head>
+<body>
+<h1>Fonometro ultrasuoni – tenuta vuoto</h1>
+
+<div class="card">
+  <button id="start">Avvia misura</button>
+  <div class="warn" id="status"></div>
+</div>
+
+<div class="card">
+  <div class="lbl">Livello in banda (relativo)</div>
+  <div class="big" id="rel">--</div>
+  <div class="lbl">dBFS (relativo, non calibrato)</div>
+  <div class="bar"><div id="fill"></div></div>
+</div>
+
+<div class="card">
+  <div class="lbl">Livello calibrato</div>
+  <div class="big" id="spl">--</div>
+  <div class="lbl">dB SPL (solo con offset di calibrazione corretto)</div>
+</div>
+
+<div class="card">
+  <div class="row"><span>Frequenza di picco</span><span id="peak">--</span></div>
+  <div class="row"><span>Baseline (rumore di fondo)</span><span id="base">non impostata</span></div>
+  <div class="row"><span>Variazione rispetto alla baseline</span><span id="delta">--</span></div>
+  <div class="row"><span>Campionamento</span><span id="sr">--</span></div>
+  <div class="warn" id="warnRange"></div>
+</div>
+
+<div class="card">
+  <label>Banda: da (Hz)</label>
+  <input id="f1" type="number" value="20000">
+  <label>a (Hz)</label>
+  <input id="f2" type="number" value="24000">
+  <label>Offset di calibrazione (dB, da un calibratore)</label>
+  <input id="cal" type="number" value="0" step="0.1">
+  <button id="baseBtn">Imposta baseline ora (impianto fermo)</button>
+  <div class="warn">Reimposta la baseline se cambi la banda o il dispositivo.</div>
+</div>
+
+<p class="warn">
+Il microfono del telefono attenua molto sopra i 20 kHz e il campionamento limita il massimo misurabile
+(di solito circa 22-24 kHz). Per valori affidabili usa la variazione rispetto alla baseline e confronta
+misure fatte sempre nello stesso punto e alla stessa distanza. I filtri di elaborazione del microfono
+vengono disattivati, quando il browser lo consente.
+</p>
+
+<script>
+  let ctx = null, analyser = null, data = null, timer = null;
+  let baseline = null, lastRel = null;
+  const $ = id => document.getElementById(id);
+
+  $('start').onclick = async () => {
+    if (ctx) { stop(); return; }
+    // Il contesto audio va creato subito, durante il tocco dell'utente (richiesto da iOS/Safari).
+    ctx = new (window.AudioContext || window.webkitAudioContext)();
+    try {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        throw new Error('il browser non supporta il microfono su questa pagina (serve HTTPS).');
+      }
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false }
+      });
+      await ctx.resume();
+      const src = ctx.createMediaStreamSource(stream);
+      analyser = ctx.createAnalyser();
+      analyser.fftSize = 8192;
+      analyser.smoothingTimeConstant = 0.2;
+      src.connect(analyser);
+      data = new Float32Array(analyser.frequencyBinCount);
+      $('sr').textContent = ctx.sampleRate + ' Hz (max ' + (ctx.sampleRate / 2000).toFixed(1) + ' kHz)';
+      $('start').textContent = 'Ferma misura';
+      $('start').classList.add('stop');
+      timer = setInterval(tick, 100);
+    } catch (e) {
+      if (ctx) { ctx.close(); ctx = null; }
+      $('status').textContent = 'Microfono non avviato: ' + e.message + ' Controlla il permesso del microfono per questa pagina nelle impostazioni del browser.';
+    }
+  };
+
+  function stop() {
+    clearInterval(timer);
+    ctx.close();
+    ctx = null; analyser = null;
+    $('start').textContent = 'Avvia misura';
+    $('start').classList.remove('stop');
+  }
+
+  function bandLevel(f1, f2) {
+    analyser.getFloatFrequencyData(data);
+    const binHz = ctx.sampleRate / analyser.fftSize;
+    let sum = 0, peakDb = -Infinity, peakF = 0;
+    for (let i = 0; i < data.length; i++) {
+      const f = i * binHz;
+      if (f < f1 || f > f2) continue;
+      const db = data[i];
+      if (!isFinite(db)) continue;
+      sum += Math.pow(10, db / 10);
+      if (db > peakDb) { peakDb = db; peakF = f; }
+    }
+    return { rel: sum > 0 ? 10 * Math.log10(sum) : -120, peakF };
+  }
+
+  function tick() {
+    const nyq = ctx.sampleRate / 2;
+    const f1 = +$('f1').value;
+    const f2 = Math.min(+$('f2').value, nyq);
+    $('warnRange').textContent = (+$('f2').value > nyq)
+      ? 'Attenzione: il campionamento arriva solo a ' + (nyq / 1000).toFixed(1) + ' kHz, la banda è stata limitata.'
+      : '';
+
+    const { rel, peakF } = bandLevel(f1, f2);
+    lastRel = rel;
+    $('rel').textContent = rel.toFixed(1);
+    $('spl').textContent = (rel + (+$('cal').value)).toFixed(1);
+    $('peak').textContent = (peakF / 1000).toFixed(1) + ' kHz';
+    $('fill').style.width = Math.max(0, Math.min(100, (rel + 120) / 120 * 100)) + '%';
+    if (baseline !== null) {
+      const d = rel - baseline;
+      $('delta').textContent = (d >= 0 ? '+' : '') + d.toFixed(1) + ' dB';
+    }
+  }
+
+  $('baseBtn').onclick = () => {
+    if (lastRel === null) { alert('Avvia prima la misura.'); return; }
+    baseline = lastRel;
+    $('base').textContent = baseline.toFixed(1) + ' dBFS';
+    $('delta').textContent = '0.0 dB';
+  };
+</script>
+</body>
+</html>
